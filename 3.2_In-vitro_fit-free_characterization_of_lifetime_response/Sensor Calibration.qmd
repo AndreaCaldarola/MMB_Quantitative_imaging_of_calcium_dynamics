@@ -1,0 +1,401 @@
+---
+title: "FLITS Calibration"
+author: "J.Goedhart & A. Caldarola"
+format: html
+---
+
+## Intro
+
+The purpose of this document is to obtain a calibration curve for a purified biosensor that responds to calcium with a lifetime change. The input data consists of G,S coordinates for a polar plot (from FLIM) and calcium concentrations. The FLIM data were measured in a multiwell plate, and the coordinates of the wells are used as unique identifiers for the conditions.
+
+
+## Preparations
+
+Load packages
+
+
+```{r}
+library(tidyverse)
+library(broom)
+library(nls.multstart)
+```
+
+
+## Load the data and combine in a single dataframe
+
+Load the the calcium data for each well (calculated from the amount of hi&lo buffer that was used, and the Kd and pH of the buffer):
+
+```{r}
+df_conc <- read.csv("Calibration_Ca_Concentrations.csv")
+head(df_conc)
+```
+
+Load the G&S coordinates for each well (data converted from the raw data that was in a ptu file):
+
+```{r}
+df_calibration <- read.csv("df_GS.csv")
+head(df_calibration)
+```
+
+Bind the dataframes, wells identify the conditions:
+
+```{r}
+df_calibration <- df_calibration %>% full_join(df_conc, by = c("sample" = "Sample"))
+head(df_calibration)
+
+
+```
+
+## Plot
+
+Create directory to store plots in
+```{r}
+dir.create("Plots")
+```
+
+The G & S data can be visualized in a scatter plot, which is called a polar, or phasor plot. Data characterized by a single exponential lifetime fall on a semicircle ('half a circle') and exponential decays fall within the circle. Let's first define and plot the semicircle:
+
+```{r}
+#define a function for a circle
+make_half_circle <- function(center = c(0,0),diameter = 1, npoints = 100){
+  r = diameter / 2
+  tt <- seq(0,pi,length.out = npoints)
+  xx <- center[1] + r * cos(tt)
+  yy <- center[2] + r * sin(tt)
+  return(data.frame(x = xx, y = yy))
+}
+#call the function, with proper centre
+polar <- make_half_circle(c(0.5,0))
+#Define empty_polar:
+empty_polar <- ggplot(polar,aes(x,y)) + geom_path() + 
+  coord_fixed(ratio=1, xlim=c(0,1), ylim=c(0,0.5)) + xlab("G") +ylab("S") + theme_light(base_size = 16)
+#Plot:
+empty_polar
+```
+
+We can now add the experimental data, based on G and S coordinates, to the polar plot:
+
+```{r}
+Calibration_Phasor_Plot <- empty_polar + geom_point(data=df_calibration, aes(x=avg_G, y= avg_S, color=as.factor(round(Ca,0))), alpha=.8, shape=16, size=3) +
+  labs(color="[Ca2+] (nM)") +
+   guides(colour = guide_legend(ncol = 2))  +
+  facet_wrap(~Probe)
+
+ggsave("Plots/Calibration_Phasor_Plot.png")
+print(Calibration_Phasor_Plot)
+  
+```
+
+We see a nice linear relation between G and S and the datapoints are nicely distributed over the line. These data will be used to generate a calibration curve.
+
+
+## Analysis of fractions
+
+The next step is to use the combined G&S coordinates to generate a calibration curve.
+First, we calculate the extreme values for G&S and store these in the dataframe `extremes` (the extremes are found at the maximal and minimal free Ca2+ concentration that was used in the calibration):
+
+Get G and S of the two extremes
+
+```{r}
+df_sum  <- df_calibration %>%
+  group_by(Ca, Probe) %>%
+  summarize(n=n(),
+            mean_G=mean(avg_G),
+            mean_S=mean(avg_S)
+            )
+
+
+df_cal_extremes <- filter(df_sum, Ca==0 | Ca==39000)
+```
+
+
+We can calculate, for each calcium concentration, the difference between the extreme value and the actual value. These data `dG` and `dS` are added to the dataframe:
+
+```{r}
+df_calibration <- df_calibration %>%
+  group_by(Probe) %>%
+  mutate(
+    avg_G_min = mean(avg_G[Ca == 0]),
+    avg_S_min = mean(avg_S[Ca == 0]),
+    dG = avg_G - avg_G_min,
+    dS = avg_S - avg_S_min
+  ) %>%
+  ungroup()
+```
+
+
+We can plot these data and see what we have so far. We will plot the experimental data as we have seen before in the polar plot, as well as a linear line connecting the two extremes. The two extremes are indicated with a black dot:
+
+```{r}
+df_cal_extremes <- df_cal_extremes %>%
+  group_by(Probe) %>%
+  mutate(
+    avg_G_min = mean_G[Ca == 0],
+    avg_S_min = mean_S[Ca == 0],
+    dG = mean_G - avg_G_min,
+    dS = mean_S - avg_S_min
+  ) %>%
+  ungroup()
+```
+
+```{r}
+dG_dS_Plot <- ggplot(data = df_calibration, aes(x = dG, y = dS)) + geom_point(aes(color=as.factor(round(Ca, digits=0))), alpha=.8, shape=16, size=3) +
+  geom_line(data=df_cal_extremes, aes(x=dG, y= dS), color="black") +
+  geom_point(data=df_cal_extremes, aes(x=dG, y= dS), color="black", shape=16, size=2) +
+    facet_wrap(~Probe) +
+  theme_light(base_size = 16)  +
+  labs(color="[Ca2+] (nM)") + 
+ guides(colour = guide_legend(ncol = 2))  +
+     coord_fixed(xlim = c(0,0.25), ylim = c(-0.06,0.01))
+
+ggsave("Plots/dG&dS_Plot.png")
+print(dG_dS_Plot)
+```
+
+These data look similar to the data in the polar plot. The difference is that the line crosses the origin (0,0), which simplifies the calculations.
+To generate a calibration, we will project the data on the line and calculate the line fraction. This is defined as the distance of the projected data relative to the length of the line. 
+Let's first calculate the value that belong to the other extreme, i.e. maximal Ca2+:
+
+```{r}
+df_calibration <- df_calibration %>%
+  group_by(Probe) %>%
+  mutate(
+    avg_G_max = mean(dG[Ca == 39000]),
+    avg_S_max = mean(dS[Ca == 39000])
+  ) %>%
+  ungroup()
+```
+
+
+
+
+
+The first step is to calculate the line fraction which is a projection of a G,S, coordinate onto a line that is defined by the two extremes:
+
+```{r}
+df_calibration <- df_calibration %>% mutate(IN = dG * avg_G_max + dS * avg_S_max) %>%
+  mutate(lfraction = IN/(avg_G_max*avg_G_max + avg_S_max*avg_S_max))
+```
+
+
+Plotting the line fraction as a function of Ca2+
+
+
+```{r}
+ggplot(df_calibration, aes(x=Ca, y=lfraction)) + 
+# Add 1 to the 0 Ca2+ point for plotting
+  geom_point(data=df_calibration[df_calibration$Ca==0,], size=4,alpha=0.5, aes(x=Ca+1),color='gray') +
+  geom_point(data=df_calibration[df_calibration$Ca!=0,], size=4,alpha=0.5, color='green') + 
+  scale_x_log10() +
+ facet_wrap(~Probe) +
+  xlab("[Ca2+] (nM)") + ylab("Line Fraction") +
+  theme_light(base_size = 16)  
+```
+
+fitting the line fraction:
+
+```{r}
+# Store the max and minimum line fractions as variable as well as in the dataframe itself (these should be 0 and 1)
+
+df_calibration<- df_calibration %>% 
+  mutate(maxlfraction=max(lfraction)) %>%
+  mutate(minlfraction=min(lfraction))
+
+maxlinefrac <-max(df_calibration$lfraction)
+minlinefrac <-min(df_calibration$lfraction)  
+
+```
+
+```{r}
+fit <- df_calibration %>%
+  nest(data = -Probe) %>%
+  mutate(
+    fit = map(data, ~nls_multstart(lfraction ~ maxlfraction+(minlfraction-maxlfraction)/(1+(Ca/EC50)^slope),
+                         data=.,
+                         iter=500,
+                         start_lower= list(EC50=.001, slope=+1),
+                         start_upper= list(EC50=10, slope=10),
+                         supp_errors='Y')),
+        tidied = map(fit, tidy),
+        augmented = map(fit, augment)
+    )
+
+fit
+```
+
+
+We have a nested tibble with results, and we can extract the fitted parameters by 'unnesting' the column `tidied`, which has the results. This is in a long format, so to display it as a table, we can use `pivot_wider()`:
+
+
+```{r}
+df_fit <- fit %>%
+  unnest(tidied) %>%
+  dplyr::select(Probe, term, estimate) %>%
+  pivot_wider(names_from = term, values_from = estimate)
+df_fit
+```
+
+To display the fitted model, we can use the parameters to reconstruct the sigmoid curve. Although the fitting gives 'augmented' values, this only displays the data for the provided Ca values and it does not have interpolated values. We can calculate the fitted model by providing a series of Ca values and calculate the `predicted_lfraction` based on the fitted parameters:
+
+```{r}
+predictions <- fit %>%
+  mutate(
+    predicted = map(fit, function(model) {
+      # Extract model coefficients
+      coefs <- coef(model)
+
+      # Create a smooth sequence of Ca values
+      ca_range <- c(10^seq(0,5,0.1))
+
+      # Predict lfraction using the model equation
+      data.frame(
+        Ca = ca_range,
+        predicted_lfraction = with(as.list(coefs),
+          maxlinefrac + (minlinefrac - maxlinefrac) / (1 + (ca_range / EC50)^slope)
+        )
+      )
+    })
+  ) %>%
+  unnest(predicted)
+```
+
+The resulting dataframe `predictions` is used to plot a fitted curve on top of the experimental data:
+
+Adding 0.05 and 0.95 line fraction ca2+ concentrations
+```{r}
+df_fit <- df_fit %>% mutate(lf0.05=EC50*((minlinefrac-maxlinefrac)/((minlinefrac+(maxlinefrac-minlinefrac)*0.05)-maxlinefrac)-1)^(1/slope))
+df_fit <- df_fit %>% mutate(lf0.95=EC50*((minlinefrac-maxlinefrac)/((minlinefrac+(maxlinefrac-minlinefrac)*0.95)-maxlinefrac)-1)^(1/slope))
+```
+
+plotting fitting results 
+```{r}
+Line_Fraction_Plot <- ggplot(data = df_calibration, aes(x=Ca, y=lfraction)) +
+   geom_point(data=df_calibration[df_calibration$Ca==0,], size=4,alpha=0.5, aes(x=Ca+1),color='gray') +
+  geom_point(data=df_calibration[df_calibration$Ca!=0,], size=4, ,alpha=0.5, color='green') + 
+
+  geom_vline(data = df_fit, aes(xintercept=EC50),linetype = 'dashed') +
+  geom_text(data = df_fit, aes(x=EC50, label = paste(round(EC50, 0)," nM"), y=.45), hjust=-0.2, color="black") +
+  geom_vline(data = df_fit, aes(xintercept=lf0.05),linetype = 'dashed') +
+  geom_text(data = df_fit, aes(x=lf0.05, label = paste(round(lf0.05, 0)," nM"), y=.15), hjust=+1.1, color="black") +
+  geom_vline(data = df_fit, aes(xintercept=lf0.95),linetype = 'dashed') +
+  geom_text(data = df_fit, aes(x=lf0.95, label = paste(round(lf0.95, 0)," nM"), y=.85), hjust=-0.2, color="black") +
+  geom_text(data = df_fit, aes(x=11, y=0.55,  label = paste("nH=", round(slope,2))), hjust=0, color="black") +
+  xlab("[Ca2+] (nM)") + ylab("Line Fraction") +
+
+
+    # Predicted curves
+  geom_line(data = predictions, aes(x = Ca, y = predicted_lfraction, group=Probe), color="black") +
+  facet_wrap(~Probe) +
+  scale_x_log10() +
+  theme_light(base_size = 16)  +
+
+  theme(legend.position = "none")
+
+ggsave("Plots/Line_Fraction_Plot.png")
+print(Line_Fraction_Plot)
+```
+
+correcting line fraction for the intensity difference of the two states (Brightness of bound state/Brightness of unbound state=0.6645) as in equation 5 of https://www.nature.com/articles/s41467-021-27249-w
+```{r}
+df_calibration <- df_calibration %>% mutate(correctedlfraction =(lfraction/(0.6645*(1-lfraction)+lfraction)))
+
+# Storing max and min corrected line fraction 
+df_calibration<- df_calibration %>% 
+  mutate(maxclfraction=max(correctedlfraction)) %>%
+  mutate(minclfraction=min(correctedlfraction))
+
+maxclinefrac <-max(df_calibration$correctedlfraction)
+minclinefrac <-min(df_calibration$correctedlfraction)  
+
+
+```
+
+Fitting corrected line fraction:
+
+```{r}
+
+library(nls.multstart)
+
+correctedfit <- df_calibration %>%
+  nest(data = -Probe) %>%
+  mutate(
+    fit = map(data, ~nls_multstart(correctedlfraction ~ maxclfraction+(minclfraction-maxclfraction)/(1+(Ca/EC50)^slope),
+                         data=.,
+                         iter=500,
+                         start_lower= list(EC50=300, slope=+0.5),
+                         start_upper= list(EC50=500, slope=+3),
+                         supp_errors='Y')),
+        tidied = map(fit, tidy),
+        augmented = map(fit, augment)
+    )
+
+correctedfit
+```
+
+
+```{r}
+df_correctedfit <- correctedfit %>%
+  unnest(tidied) %>%
+  dplyr::select(Probe, term, estimate) %>%
+  pivot_wider(names_from = term, values_from = estimate)
+df_correctedfit
+```
+
+
+
+```{r}
+predictionscorrected <- correctedfit %>%
+  mutate(
+    predictedcorrected = map(fit, function(model) {
+      # Extract model coefficients
+      coefs <- coef(model)
+
+      # Create a smooth sequence of Ca values
+      ca_range <- c(10^seq(0,5,0.1))
+
+      # Predict lfraction using the model equation
+      data.frame(
+        Ca = ca_range,
+        predicted_correctedlfraction = with(as.list(coefs),
+          maxclinefrac + (minclinefrac - maxclinefrac) / (1 + (ca_range / EC50)^slope)
+        )
+      )
+    })
+  ) %>%
+  unnest(predictedcorrected)
+```
+
+The resulting dataframe `predictions` is used to plot a fitted curve on top of the experimental data:
+
+Adding 0.05 and 0.95 lf
+```{r}
+df_correctedfit <- df_correctedfit %>% mutate(clf0.05=EC50*((minclinefrac-maxclinefrac)/((minclinefrac+(maxclinefrac-minclinefrac)*0.05)-maxclinefrac)-1)^(1/slope))
+df_correctedfit <- df_correctedfit %>%  mutate(clf0.95=EC50*((minclinefrac-maxclinefrac)/((minclinefrac+(maxclinefrac-minclinefrac)*0.95)-maxclinefrac)-1)^(1/slope))
+```
+
+```{r}
+Corrected_Line_Fraction_Plot <- ggplot(data = df_calibration, aes(x=Ca, y=correctedlfraction)) +
+   geom_point(data=df_calibration[df_calibration$Ca==0,], size=4,alpha=0.5, aes(x=Ca+1),color='gray') +
+  geom_point(data=df_calibration[df_calibration$Ca!=0,], size=4, ,alpha=0.5, color='green') + 
+  geom_vline(data = df_correctedfit, aes(xintercept=EC50),linetype = 'dashed') +
+  geom_text(data = df_correctedfit, aes(x=EC50, label = paste(round(EC50, 0)," nM"), y=.45), hjust=-0.2, color="black") +
+  geom_vline(data = df_correctedfit, aes(xintercept=clf0.05),linetype = 'dashed') +
+  geom_text(data = df_correctedfit, aes(x=clf0.05, label = paste(round(clf0.05, 0)," nM"), y=.15), hjust=+1.1, color="black") +
+  geom_vline(data = df_correctedfit, aes(xintercept=clf0.95),linetype = 'dashed') +
+  geom_text(data = df_correctedfit, aes(x=clf0.95, label = paste(round(clf0.95, 0)," nM"), y=.85), hjust=-0.2, color="black") +
+  geom_text(data = df_correctedfit, aes(x=11, y=0.55,  label = paste("nH=", round(slope,2))), hjust=0, color="black") +
+  xlab("[Ca2+] (nM)") + ylab("Corrected Line Fraction") +
+
+
+    # Predicted curves
+  geom_line(data = predictionscorrected, aes(x = Ca, y = predicted_correctedlfraction, group=Probe), color="black") +
+  facet_wrap(~Probe) +
+  scale_x_log10() +
+  theme_light(base_size = 16)  +
+
+  theme(legend.position = "none")
+
+ggsave("Plots/Corrected_Line_Fraction_Plot.png")
+print(Corrected_Line_Fraction_Plot)
+```
+

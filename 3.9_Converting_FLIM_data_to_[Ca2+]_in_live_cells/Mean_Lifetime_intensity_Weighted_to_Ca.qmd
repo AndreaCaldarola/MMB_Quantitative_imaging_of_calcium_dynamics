@@ -1,0 +1,467 @@
+---
+title: "Mean Lifetime to Ca2+"
+author: "A. Caldarola"
+format: html
+---
+
+# How it works
+
+The script expects two files as inputs:
+
+1) Las X fitting results for an in vitro calibration of a sensor (e.g. purified sensor imaged at known free Ca2+ concentrations), saved as a .csv file;
+2) Las X fitting results for a (timelapse) cell-based imaging experiment using the same sensor, saved as a .csv file;
+
+For this quantification to be as accurate as possible, the two imaging experiments should be conducted with the same imaging settings (especially with regard to laser line used, detector range, and laser frequency) and the fitting of the cell data  should be done using the same component lifetimes and fitting range used during the fitting of the in vitro calibration.
+
+# From calcium to lifetime
+
+```{r}
+#| warning: false
+#| message: false
+
+# Load libraries
+# See `setup/install_packages.qmd` for automatic configuration.
+
+library(nls.multstart)
+library(tidyverse)
+library(broom)      
+
+```
+
+We first collect the calibration data that we use to calculate our fit:
+
+```{r}
+df_calibration <- read.csv("Calibration_fit.csv")
+glimpse(df_calibration)
+```
+
+Here Ca2+ concentrations (nanomolar) are added to the calibration dataframe.
+
+```{r}
+df_conc <- read.csv("Calibration_Ca_Concentrations.csv")
+df_calibration <- df_calibration %>% full_join(df_conc, by = c("Path" = "Sample"))
+    
+glimpse(df_calibration)
+```
+Also load the cell-based experimental data:
+
+```{r}
+df_experiment <- 
+  read.csv(
+    "Experiment_fit.csv"
+    ) |>
+  mutate( Time = 
+      gsub(" s", "", Time) |> 
+      as.numeric()
+  )
+  
+# head(df_experiment)
+glimpse(df_experiment)
+```
+Create directory to store plots in
+```{r}
+dir.create("Plots")
+```
+
+Chose whether you want to use Intensity Weighted Mean τ or Amplitude weighted Mean τ 
+
+```{r}
+#Only one code section should be uncommented: code section (1) should be uncommented if you want to use Intensity Weighted Mean τ, (2) if Amplitude weighted Mean τ 
+
+#(1)
+names(df_calibration)[names(df_calibration) == 'Mean.τ..Intensity.Weighted..ns'] <- 'Mean_τ'
+names(df_experiment)[names(df_experiment) == 'Mean.τ..Intensity.Weighted..ns'] <- 'Mean_τ'
+
+#(2)
+# names(df_calibration)[names(df_calibration) == 'Mean.τ..Amplitude.Weighted.ns'] <- 'Mean_τ'
+# names(df_experiment)[names(df_experiment) == 'Mean.τ..Amplitude.Weighted.ns'] <- 'Mean_τ'
+```
+
+Now that we have the the '$y$' ($\tau$, `Mean_τ`) and '$x$' (`Ca`) values on which we want to 
+base our fit, we can perform the actual fit:
+
+```{r}
+# Store the max and minimum tau as variable as well as in the dataframe itself 
+
+df_calibration<- df_calibration %>% 
+  mutate(maxtau=max(Mean_τ)) %>%
+  mutate(mintau=min(Mean_τ))
+
+maxtau <-max(df_calibration$Mean_τ)
+mintau <-min(df_calibration$Mean_τ)  
+
+```
+
+```{r}
+
+# Assume relation between lifetime and Ca is described by this function
+fn_lifetime_from_ca <- function(Ca, EC50, slope, mintau, maxtau) {
+  # Inhibitory Hill function
+  mintau + (maxtau-mintau) / (1+(Ca/EC50)^slope)
+  # (Activation Hill function would look like:)
+  # mintau + (maxtau-mintau) / (1+(EC50/Ca)^slope) 
+}
+
+# Now fit that function to data
+nls_fit <- df_calibration |>
+  nls_multstart(
+    formula = Mean_τ ~ fn_lifetime_from_ca(Ca, EC50, slope, mintau, maxtau),
+    iter=500,
+    start_lower= list(EC50=200, slope=-3),
+    start_upper= list(EC50=600, slope=-1),
+    supp_errors='Y')
+params_fit <- coef(nls_fit)
+
+# Sanity check
+# fn_lifetime_from_ca(1, params_fit['EC50'], params_fit['slope'])
+# fn_lifetime_from_ca(1e4, params_fit['EC50'], params_fit['slope'])
+
+```
+
+We can now create a dataframe with a prediction for predefined `Ca` values, to 
+later show the relationship that we found. It's however even easier to 
+use `geom_function()` to plot the relationship.
+
+```{r}
+# Currently not used, but can be used for plotting the fitted relationship
+df_predictions <- data.frame(
+  Ca =  c(10^seq(0,5,0.1))) |>
+    mutate(
+      predicted_mliw = 
+        fn_lifetime_from_ca(
+            Ca, 
+            params_fit["EC50"], 
+            params_fit["slope"], 
+            mintau, 
+            maxtau
+        )
+  )
+```
+
+To predict `Ca` values, we want to have the inverse function, such that we can go from a 
+tau value to a Ca2+ concentration.
+
+```{r}
+# Now we'd also like to have the inverse function
+fn_ca_from_lifetime <- function(tau, EC50, slope, mintau, maxtau) {
+  
+  # To get the inverse, we do:
+  # tau = mintau + (maxtau-mintau) / (1+(Ca/EC50)^slope)
+  # (tau - mintau) = (maxtau-mintau) / (1+(Ca/EC50)^slope)
+  # (maxtau-mintau)/(tau - mintau) = 1+(Ca/EC50)^slope
+  # ((maxtau-mintau)/(tau - mintau) - 1)^(1/slope) = (Ca/EC50)
+  # ((maxtau-mintau)/(tau - mintau) - 1)^(1/slope) * EC50 = Ca
+  
+  # Thus:
+  ((maxtau-mintau) / (tau - mintau) - 1)^(1/slope) * EC50
+}
+
+# And predictions close to the end of the tau range
+tau_range <- (maxtau-mintau)
+tau_005 <- (tau_range*0.05+mintau)
+tau_095 <- (tau_range*0.95+mintau)
+Ca_tau_005  <- fn_ca_from_lifetime(
+                tau_005, 
+                params_fit["EC50"], 
+                params_fit["slope"], 
+                mintau, 
+                maxtau)
+Ca_tau_095 <- fn_ca_from_lifetime(
+                tau_095, 
+                params_fit["EC50"], 
+                params_fit["slope"],  
+                mintau, 
+                maxtau)
+                
+```
+
+Now make the Ca2+ predictions curve based on the calibration:
+
+```{r}
+
+Lifetime_Calibration_Plot <- ggplot(data = df_calibration, aes(x=Ca, y=Mean_τ)) + 
+  # Add 1 to the 0 Ca2+ point for plotting
+  geom_point(data=df_calibration[df_calibration$Ca==0,], size=4,alpha=0.5, aes(x=Ca+1),color='gray') +
+  geom_point(data=df_calibration[df_calibration$Ca!=0,], size=4,alpha=0.5, color='green') + 
+  # Now add EC50
+  geom_vline(xintercept=params_fit["EC50"],linetype = 'dashed') +
+  annotate("text", x=params_fit["EC50"], y=mintau+tau_range*.5, label = paste(round(params_fit["EC50"], 0), "nM"), hjust=-0.1, color="black") +
+  # Add hill coefficient label
+  annotate("text",x=11, y=3.3,  label = paste("nH=", round(params_fit["slope"],2)), hjust=0, color="black") +
+  # Now add Ca2+ for 5% and 95% of max tau range
+  geom_vline(xintercept=Ca_tau_005,linetype = 'dashed') +
+  annotate("text", x=Ca_tau_005, y=(tau_005*1.03), label = paste(round(Ca_tau_005, 0), "nM"), hjust=-0.1, color="black") +
+  geom_vline(xintercept=Ca_tau_095,linetype = 'dashed') +
+  annotate("text", x=Ca_tau_095, y=(tau_095*1.03), label = paste(round(Ca_tau_095, 0), "nM"), hjust=-0.1, color="black") +
+  xlab("Free Ca2+ (uM)") + ylab("Mean τ (ns)") +
+  # Predicted curve
+  # geom_line(data = df_predictions, aes(x = Ca, y = predicted_mliw), color="black") +  
+  # Also show the predicted curve using geom_function
+  geom_function(fun = function(x) fn_lifetime_from_ca(x, params_fit["EC50"], params_fit["slope"], mintau, maxtau), color="black") +
+  scale_x_log10() + 
+  theme_light(base_size = 16)  +
+  labs(x="[Ca2]+ (nM)") +
+  theme(legend.position = "none") +
+  ylim(mintau-tau_range*.1,maxtau+tau_range*.1) +
+   facet_wrap(~Probe) 
+ggsave("Plots/Lifetime_Calibration_Plot.png") 
+print(Lifetime_Calibration_Plot)
+```
+
+# Determining Ca2+ in experiments based on tau values
+
+
+
+And we extend the prediction function, such that it will tell us whether the
+prediction is reliable, and will report the same Ca2+ concentration for tau values outside 
+the range deemed reliable.
+
+```{r}
+
+fn_ca_from_lifetime_extended <- function(tau, EC50, slope, mintau, maxtau) {    
+    
+  # If outside reliable range, return edge value, and flag outside range
+  if (tau < tau_005) {
+    return(list(predicted_ca = Ca_tau_005, within_reliable_range = FALSE))
+  }
+  if (tau > tau_095) { 
+    return(list(predicted_ca = Ca_tau_095, within_reliable_range = FALSE))
+  }
+  
+  # Otherwise, return predicted value and flag within range
+  return(list(
+      predicted_ca = fn_ca_from_lifetime(tau, EC50, slope, mintau, maxtau), 
+      within_reliable_range = TRUE
+  ))
+}
+``` 
+
+And we use the extended function to add predictions to the experimental data:
+
+```{r}
+df_experiment <- df_experiment |>
+
+  # add the prediction (will return two values, the prediction, and whether inside/outside reliable range)
+  mutate(
+    temp = map(
+      Mean_τ, 
+      function(tau) {
+        fn_ca_from_lifetime_extended(
+          tau, 
+          params_fit["EC50"], 
+          params_fit["slope"],
+          mintau,
+          maxtau
+        )
+      }
+    )
+  ) |>
+  # unpack the two values into two columns
+  unnest_wider(temp) |>
+  
+  # And some plot-specific modifications
+  #
+  # For plotting, we need to remove each of the last FALSE values, as the line segments
+  # are colored by the point to the left
+  # First group by relevant categories
+  group_by(Region) |>
+  # now perform the modification
+  mutate(within_reliable_range_plot = 
+      # if the next value is true, make this value true (shortens the "falses")
+      (within_reliable_range | lead(within_reliable_range))
+  ) |>
+  # ungroup again
+  ungroup()
+# handle the last point in within_reliable_range_plot
+df_experiment$within_reliable_range_plot[nrow(df_experiment)] = 
+  df_experiment$within_reliable_range[nrow(df_experiment)]
+    
+glimpse(df_experiment)
+
+```
+
+And now make a plot of the data:
+
+```{r}
+Wholeframeplot <- ggplot(data = df_experiment[df_experiment$Region %in% c('Overall Decay'),], aes(x=Time, y=predicted_ca)) +
+      
+  # line with color depending on range
+  # group=NA is to prevent lines being separated based on range
+  # (thanks to https://www.youtube.com/watch?v=R0YVITfGj_w for explaining this)
+  geom_line(aes(color = within_reliable_range_plot, group=NA), linewidth = .8) +
+  # in the current appraoch, single points outside the range will only be grey
+  # if they're plotted by geom_point
+  geom_point(aes(color = within_reliable_range, group=NA), size = .5) +
+  scale_color_manual(
+    values = c(`TRUE` = "black", `FALSE` = "grey"),
+    labels = c(`TRUE` = "inside", `FALSE` = "outside")
+  ) +
+
+  # theme & remove border (personal preference)
+  theme_bw() +
+  theme(
+    panel.border = element_blank(),
+    legend.position = 'none' # I would explain style in caption of figure
+  ) +
+  
+  # Scale; limits are chosen such that plot precisely encompasses limits
+  scale_y_log10(limits = c(Ca_tau_095, Ca_tau_005),breaks=c(as.numeric(Ca_tau_095), 100,300,1000,3000, as.numeric(Ca_tau_005)), minor_breaks=NULL, labels=c(paste("≤",round(Ca_tau_095,0)), 100,300,1000,3000,paste("≥",round(Ca_tau_005,0)))) +
+  geom_hline(aes(yintercept=Ca_tau_095),linetype = 'dashed', size=.7)+
+  geom_hline(aes(yintercept=Ca_tau_005),linetype = 'dashed', size=.7)+
+  # Captions
+  labs(color="Reliable range") +  
+  ylab('[Ca2+] (nM)') +
+  xlab('Time (s)')+
+  #Add v lines to show where histamine and thapsigargin were added
+  geom_vline(xintercept=37,linetype = 'dashed', size=.8, color='gray')+
+  geom_vline(xintercept=460,linetype = 'dashed', size=.8, color='gray')+
+  # Facet wrap with different 
+  facet_wrap(~ Region)
+
+ggsave("Plots/Whole_Frame_Plot.png")
+print(Wholeframeplot)
+```
+
+In the plot above, Ca2+ concentrations outside the reliable range were set to the 
+minimum or maximum of the Ca2+ range, corresponding to too high or too low 
+tau values, respectively. Ca2+ values outside the range are indicated in grey. 
+The y-axis limits of the plot correspond to the reliable range.
+
+```{r}
+Cellsplot <- ggplot(data = df_experiment[!(df_experiment$Region %in% c('Overall Decay','Cell 4 Top', 'Cell 4 Bottom', 'Cell 4 Middle')),], aes(x=Time, y=predicted_ca)) +
+      
+  # line with color depending on range
+  # group=NA is to prevent lines being separated based on range
+  # (thanks to https://www.youtube.com/watch?v=R0YVITfGj_w for explaining this)
+  geom_line(aes(color = within_reliable_range_plot, group=NA), linewidth = .8) +
+  # in the current appraoch, single points outside the range will only be grey
+  # if they're plotted by geom_point
+  geom_point(aes(color = within_reliable_range, group=NA), size = .5) +
+  scale_color_manual(
+    values = c(`TRUE` = "black", `FALSE` = "grey"),
+    labels = c(`TRUE` = "inside", `FALSE` = "outside")
+  ) +
+
+  # theme & remove border (personal preference)
+  theme_bw() +
+  theme(
+    panel.border = element_blank(),
+    legend.position = 'none' # I would explain style in caption of figure
+  ) +
+  
+  # Scale; limits are chosen such that plot precisely encompasses limits
+  scale_y_log10(limits = c(Ca_tau_095, Ca_tau_005),breaks=c(as.numeric(Ca_tau_095), 100,300,1000,3000, as.numeric(Ca_tau_005)), minor_breaks=NULL, labels=c(paste("≤",round(Ca_tau_095,0)), 100,300,1000,3000,paste("≥",round(Ca_tau_005,0)))) +
+  geom_hline(aes(yintercept=Ca_tau_095),linetype = 'dashed', size=.7)+
+  geom_hline(aes(yintercept=Ca_tau_005),linetype = 'dashed', size=.7)+
+  # Captions
+  labs(color="Reliable range") +  
+  ylab('[Ca2+] (nM)') +
+  xlab('Time (s)')+
+  #Add v lines to show where histamine and thapsigargin were added
+  geom_vline(xintercept=37,linetype = 'dashed', size=.8, color='gray')+
+  geom_vline(xintercept=460,linetype = 'dashed', size=.8, color='gray')+
+
+  # Facet wrap with different 
+  facet_wrap(~ Region)
+
+ggsave("Plots/All_Cells_Plot.png")
+print(Cellsplot)
+```
+
+```{r}
+df_cells234 <- df_experiment[df_experiment$Region %in% c('Cell 2', 'Cell 3', 'Cell 4'),]
+Cellsplotstacked234 <- ggplot(data = df_cells234, aes(x=Time, y=predicted_ca)) +
+      
+  # line with color depending on range
+  # group=NA is to prevent lines being separated based on range
+  # (thanks to https://www.youtube.com/watch?v=R0YVITfGj_w for explaining this)
+  geom_line(inherit.aes=FALSE, aes(x=Time, y=predicted_ca, color = Region), linewidth = .8) +
+  # in the current appraoch, single points outside the range will only be grey
+  # if they're plotted by geom_point
+  
+    geom_point(data=df_cells234[df_cells234$within_reliable_range==TRUE,], color = "black", size = .5) +
+      geom_point(data=df_cells234[df_cells234$within_reliable_range==FALSE,], color = "gray", size = .5) +
+  # scale_color_manual(
+  #    values = c(`TRUE` = "black", `FALSE` = "grey"),
+  #   labels = c(`TRUE` = "inside", `FALSE` = "outside")
+  #  ) , group=NA)) +
+
+
+  # theme & remove border (personal preference)
+  theme_bw() +
+
+  theme(
+    panel.border = element_blank() ,
+    legend.position="inside",
+    legend.position.inside = c(0.85, 0.8) )+
+  
+  # Scale; limits are chosen such that plot precisely encompasses limits
+  scale_y_log10(limits = c(Ca_tau_095, Ca_tau_005),breaks=c(as.numeric(Ca_tau_095), 100,300,1000,3000, as.numeric(Ca_tau_005)), minor_breaks=NULL, labels=c(paste("≤",round(Ca_tau_095,0)), 100,300,1000,3000,paste("≥",round(Ca_tau_005,0)))) +
+  geom_hline(aes(yintercept=Ca_tau_095),linetype = 'dashed', size=.7)+
+  geom_hline(aes(yintercept=Ca_tau_005),linetype = 'dashed', size=.7)+
+  # Captions
+ # labs(color="Reliable range") +  
+  ylab('[Ca2+] (nM)') +
+  xlab('Time (s)')+
+  #Add v lines to show where histamine and thapsigargin were added
+  geom_vline(xintercept=37,linetype = 'dashed', size=.8, color='gray')+
+  geom_vline(xintercept=460,linetype = 'dashed', size=.8, color='gray')
+
+
+  # Facet wrap with different 
+#  facet_wrap(~ Region)
+
+
+ggsave("Plots/Cells_234_Plot_Stacked.png")
+print(Cellsplotstacked234)
+```
+
+
+```{r}
+df_cell4 <- df_experiment[df_experiment$Region %in% c('Cell 4 Top', 'Cell 4 Bottom', 'Cell 4 Middle'),]
+Cell4plot <- ggplot(data = df_cell4, aes(x=Time, y=predicted_ca)) +
+      
+  # line with color depending on range
+  # group=NA is to prevent lines being separated based on range
+  # (thanks to https://www.youtube.com/watch?v=R0YVITfGj_w for explaining this)
+  geom_line(inherit.aes=FALSE, aes(x=Time, y=predicted_ca, color = Region), linewidth = .8) +
+  # in the current appraoch, single points outside the range will only be grey
+  # if they're plotted by geom_point
+  
+    geom_point(data=df_cell4[df_cell4$within_reliable_range==TRUE,], color = "black", size = .5) +
+      geom_point(data=df_cell4[df_cell4$within_reliable_range==FALSE,], color = "gray", size = .5) +
+  # scale_color_manual(
+  #    values = c(`TRUE` = "black", `FALSE` = "grey"),
+  #   labels = c(`TRUE` = "inside", `FALSE` = "outside")
+  #  ) , group=NA)) +
+
+
+  # theme & remove border (personal preference)
+  theme_bw() +
+
+  theme(
+    panel.border = element_blank() ,
+    legend.position="inside",
+    legend.position.inside = c(0.85, 0.8) )+
+  
+  # Scale; limits are chosen such that plot precisely encompasses limits
+  scale_y_log10(limits = c(Ca_tau_095, Ca_tau_005),breaks=c(as.numeric(Ca_tau_095), 100,300,1000,3000, as.numeric(Ca_tau_005)), minor_breaks=NULL, labels=c(paste("≤",round(Ca_tau_095,0)), 100,300,1000,3000,paste("≥",round(Ca_tau_005,0)))) +
+  geom_hline(aes(yintercept=Ca_tau_095),linetype = 'dashed', size=.7)+
+  geom_hline(aes(yintercept=Ca_tau_005),linetype = 'dashed', size=.7)+
+  
+  # Captions
+ # labs(color="Reliable range") +  
+  ylab('[Ca2+] (nM)') +
+  xlab('Time (s)')+
+  #Add v lines to show where histamine and thapsigargin were added
+  geom_vline(xintercept=37,linetype = 'dashed', size=.8)+
+  geom_vline(xintercept=37,linetype = 'dashed', size=.8, color='gray')+
+  geom_vline(xintercept=460,linetype = 'dashed', size=.8, color='gray')
+
+
+  # Facet wrap with different 
+#  facet_wrap(~ Region)
+
+ggsave("Plots/Cell_4_Plot.png")
+print(Cell4plot)
+```
