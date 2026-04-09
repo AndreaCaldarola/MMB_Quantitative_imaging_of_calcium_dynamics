@@ -79,6 +79,7 @@ We can now add the experimental data, based on G and S coordinates, to the polar
 Calibration_Phasor_Plot <- empty_polar + geom_point(data=df_calibration, aes(x=avg_G, y= avg_S, color=as.factor(round(Ca,0))), alpha=.8, shape=16, size=3) +
   labs(color="[Ca2+] (nM)") +
    guides(colour = guide_legend(ncol = 2))  +
+  theme_light(base_size=20) +
   facet_wrap(~Probe)
 
 ggsave("Plots/Calibration_Phasor_Plot.png")
@@ -143,7 +144,7 @@ dG_dS_Plot <- ggplot(data = df_calibration, aes(x = dG, y = dS)) + geom_point(ae
   geom_line(data=df_cal_extremes, aes(x=dG, y= dS), color="black") +
   geom_point(data=df_cal_extremes, aes(x=dG, y= dS), color="black", shape=16, size=2) +
     facet_wrap(~Probe) +
-  theme_light(base_size = 16)  +
+  theme_light(base_size = 20)  +
   labs(color="[Ca2+] (nM)") + 
  guides(colour = guide_legend(ncol = 2))  +
      coord_fixed(xlim = c(0,0.25), ylim = c(-0.06,0.01))
@@ -189,7 +190,7 @@ ggplot(df_calibration, aes(x=Ca, y=lfraction)) +
   scale_x_log10() +
  facet_wrap(~Probe) +
   xlab("[Ca2+] (nM)") + ylab("Line Fraction") +
-  theme_light(base_size = 16)  
+  theme_light(base_size=20) 
 ```
 
 fitting the line fraction:
@@ -274,12 +275,12 @@ Line_Fraction_Plot <- ggplot(data = df_calibration, aes(x=Ca, y=lfraction)) +
   geom_point(data=df_calibration[df_calibration$Ca!=0,], size=4, ,alpha=0.5, color='green') + 
 
   geom_vline(data = df_fit, aes(xintercept=EC50),linetype = 'dashed') +
-  geom_text(data = df_fit, aes(x=EC50, label = paste(round(EC50, 0)," nM"), y=.45), hjust=-0.2, color="black") +
+  geom_text(data = df_fit, aes(x=EC50, label = paste(round(EC50, 0)," nM"), y=.45), size=5.5, hjust=-0.2, color="black") +
   geom_vline(data = df_fit, aes(xintercept=lf0.05),linetype = 'dashed') +
-  geom_text(data = df_fit, aes(x=lf0.05, label = paste(round(lf0.05, 0)," nM"), y=.15), hjust=+1.1, color="black") +
+  geom_text(data = df_fit, aes(x=lf0.05, label = paste(round(lf0.05, 0)," nM"), y=.15), size = 5.5, hjust=+1.1, color="black") +
   geom_vline(data = df_fit, aes(xintercept=lf0.95),linetype = 'dashed') +
-  geom_text(data = df_fit, aes(x=lf0.95, label = paste(round(lf0.95, 0)," nM"), y=.85), hjust=-0.2, color="black") +
-  geom_text(data = df_fit, aes(x=11, y=0.55,  label = paste("nH=", round(slope,2))), hjust=0, color="black") +
+  geom_text(data = df_fit, aes(x=lf0.95, label = paste(round(lf0.95, 0)," nM"), y=.85), size = 5.5, hjust=-0.2, color="black") +
+  geom_text(data = df_fit, aes(x=lf0.05/10, y=0.55,  label = paste("nH=", round(slope,2))), size=5.5, hjust=0, color="black") +
   xlab("[Ca2+] (nM)") + ylab("Line Fraction") +
 
 
@@ -287,7 +288,7 @@ Line_Fraction_Plot <- ggplot(data = df_calibration, aes(x=Ca, y=lfraction)) +
   geom_line(data = predictions, aes(x = Ca, y = predicted_lfraction, group=Probe), color="black") +
   facet_wrap(~Probe) +
   scale_x_log10() +
-  theme_light(base_size = 16)  +
+  theme_light(base_size = 20)  +
 
   theme(legend.position = "none")
 
@@ -378,12 +379,12 @@ Corrected_Line_Fraction_Plot <- ggplot(data = df_calibration, aes(x=Ca, y=correc
    geom_point(data=df_calibration[df_calibration$Ca==0,], size=4,alpha=0.5, aes(x=Ca+1),color='gray') +
   geom_point(data=df_calibration[df_calibration$Ca!=0,], size=4, ,alpha=0.5, color='green') + 
   geom_vline(data = df_correctedfit, aes(xintercept=EC50),linetype = 'dashed') +
-  geom_text(data = df_correctedfit, aes(x=EC50, label = paste(round(EC50, 0)," nM"), y=.45), hjust=-0.2, color="black") +
+  geom_text(data = df_correctedfit, aes(x=EC50, label = paste(round(EC50, 0)," nM"), y=.45), size=5.5, hjust=-0.2, color="black") +
   geom_vline(data = df_correctedfit, aes(xintercept=clf0.05),linetype = 'dashed') +
-  geom_text(data = df_correctedfit, aes(x=clf0.05, label = paste(round(clf0.05, 0)," nM"), y=.15), hjust=+1.1, color="black") +
+  geom_text(data = df_correctedfit, aes(x=clf0.05, label = paste(round(clf0.05, 0)," nM"), y=.15), size=5.5, hjust=+1.1, color="black") +
   geom_vline(data = df_correctedfit, aes(xintercept=clf0.95),linetype = 'dashed') +
-  geom_text(data = df_correctedfit, aes(x=clf0.95, label = paste(round(clf0.95, 0)," nM"), y=.85), hjust=-0.2, color="black") +
-  geom_text(data = df_correctedfit, aes(x=11, y=0.55,  label = paste("nH=", round(slope,2))), hjust=0, color="black") +
+  geom_text(data = df_correctedfit, aes(x=clf0.95, label = paste(round(clf0.95, 0)," nM"), y=.85), size=5.5, hjust=-0.2, color="black") +
+  geom_text(data = df_correctedfit, aes(x=clf0.05/10, y=0.55,  label = paste("nH=", round(slope,2))), size=5.5, hjust=0, color="black") +
   xlab("[Ca2+] (nM)") + ylab("Corrected Line Fraction") +
 
 
@@ -391,7 +392,7 @@ Corrected_Line_Fraction_Plot <- ggplot(data = df_calibration, aes(x=Ca, y=correc
   geom_line(data = predictionscorrected, aes(x = Ca, y = predicted_correctedlfraction, group=Probe), color="black") +
   facet_wrap(~Probe) +
   scale_x_log10() +
-  theme_light(base_size = 16)  +
+  theme_light(base_size = 20)  +
 
   theme(legend.position = "none")
 

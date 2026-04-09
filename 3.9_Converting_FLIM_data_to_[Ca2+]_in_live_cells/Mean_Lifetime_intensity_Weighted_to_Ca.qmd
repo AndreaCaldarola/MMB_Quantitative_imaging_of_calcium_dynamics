@@ -185,21 +185,21 @@ Lifetime_Calibration_Plot <- ggplot(data = df_calibration, aes(x=Ca, y=Mean_τ))
   geom_point(data=df_calibration[df_calibration$Ca!=0,], size=4,alpha=0.5, color='green') + 
   # Now add EC50
   geom_vline(xintercept=params_fit["EC50"],linetype = 'dashed') +
-  annotate("text", x=params_fit["EC50"], y=mintau+tau_range*.5, label = paste(round(params_fit["EC50"], 0), "nM"), hjust=-0.1, color="black") +
+  annotate("text", x=params_fit["EC50"], y=mintau+tau_range*.5, label = paste(round(params_fit["EC50"], 0), "nM"), size= 5.5, hjust=-0.1, color="black") +
   # Add hill coefficient label
-  annotate("text",x=11, y=3.3,  label = paste("nH=", round(params_fit["slope"],2)), hjust=0, color="black") +
+  annotate("text",x=Ca_tau_095/10, y=3.3,  label = paste("nH=", round(params_fit["slope"],2)), size= 5.5, hjust=0, color="black") +
   # Now add Ca2+ for 5% and 95% of max tau range
   geom_vline(xintercept=Ca_tau_005,linetype = 'dashed') +
-  annotate("text", x=Ca_tau_005, y=(tau_005*1.03), label = paste(round(Ca_tau_005, 0), "nM"), hjust=-0.1, color="black") +
+  annotate("text", x=Ca_tau_005, y=(tau_005*1.03), label = paste(round(Ca_tau_005, 0), "nM"), size= 5.5, hjust=-0.1, color="black") +
   geom_vline(xintercept=Ca_tau_095,linetype = 'dashed') +
-  annotate("text", x=Ca_tau_095, y=(tau_095*1.03), label = paste(round(Ca_tau_095, 0), "nM"), hjust=-0.1, color="black") +
+  annotate("text", x=Ca_tau_095, y=(tau_095*1.03), label = paste(round(Ca_tau_095, 0), "nM"), size= 5.5, hjust=-0.1, color="black") +
   xlab("Free Ca2+ (uM)") + ylab("Mean τ (ns)") +
   # Predicted curve
   # geom_line(data = df_predictions, aes(x = Ca, y = predicted_mliw), color="black") +  
   # Also show the predicted curve using geom_function
   geom_function(fun = function(x) fn_lifetime_from_ca(x, params_fit["EC50"], params_fit["slope"], mintau, maxtau), color="black") +
   scale_x_log10() + 
-  theme_light(base_size = 16)  +
+  theme_light(base_size = 20)  +
   labs(x="[Ca2]+ (nM)") +
   theme(legend.position = "none") +
   ylim(mintau-tau_range*.1,maxtau+tau_range*.1) +
@@ -343,7 +343,7 @@ Cellsplot <- ggplot(data = df_experiment[!(df_experiment$Region %in% c('Overall 
   ) +
 
   # theme & remove border (personal preference)
-  theme_bw() +
+  theme_bw(base_size = 20) +
   theme(
     panel.border = element_blank(),
     legend.position = 'none' # I would explain style in caption of figure
@@ -388,7 +388,7 @@ Cellsplotstacked234 <- ggplot(data = df_cells234, aes(x=Time, y=predicted_ca)) +
 
 
   # theme & remove border (personal preference)
-  theme_bw() +
+  theme_bw(base_size = 20) +
 
   theme(
     panel.border = element_blank() ,
@@ -437,7 +437,7 @@ Cell4plot <- ggplot(data = df_cell4, aes(x=Time, y=predicted_ca)) +
 
 
   # theme & remove border (personal preference)
-  theme_bw() +
+  theme_bw(base_size = 20) +
 
   theme(
     panel.border = element_blank() ,
