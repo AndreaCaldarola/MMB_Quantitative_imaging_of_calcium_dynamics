@@ -1,6 +1,6 @@
 ## Preparations
 
-Create a new environment in the terminal and install depencies:
+Create a new environment in the terminal and install dependencies:
 
 #### create a new environment
 
